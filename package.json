@@ -1,6 +1,6 @@
 {
   "name": "printa",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "CLI utility to list project structure with file contents",
   "main": "dist/index.js",
   "bin": {
@@ -8,20 +8,20 @@
   },
   "type": "module",
   "scripts": {
-    "build": "tsc && chmod +x dist/index.js",
+    "build": "rm -rf dist && tsc  && echo '#!/usr/bin/env node' > dist/tmp && cat dist/index.js >> dist/tmp && mv dist/tmp dist/index.js && chmod +x dist/index.js",
     "prepublish": "npm run build"
   },
   "dependencies": {
     "chalk": "^5.4.1",
     "cli-highlight": "^2.1.11",
     "commander": "^13.1.0",
+    "ignore": "^7.0.3",
     "istextorbinary": "^9.5.0",
     "rc": "^1.2.8"
   },
   "devDependencies": {
     "@types/node": "^22.10.10",
     "@types/rc": "^1.2.4",
-    "ts-node": "^10.9.2",
     "typescript": "^5.7.3"
   },
   "keywords": [

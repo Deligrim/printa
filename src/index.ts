@@ -1,11 +1,11 @@
-#!/usr/bin/env node
-import rc from 'rc';
-import { Command } from 'commander';
-import { readdir, readFile, lstat } from 'fs/promises';
-import { join, basename, extname, relative, resolve } from 'path';
-import chalk, { ChalkInstance } from 'chalk';
-import { highlight } from 'cli-highlight';
-import { isText } from 'istextorbinary'
+import rc from "rc";
+import { Command } from "commander";
+import { readdir, readFile, lstat } from "fs/promises";
+import { join, basename, relative, resolve, sep, extname } from "path";
+import chalk, { ChalkInstance } from "chalk";
+import { highlight } from "cli-highlight";
+import { isText } from "istextorbinary";
+import ignore, { Ignore } from "ignore";
 
 interface Entry {
   name: string;
@@ -16,12 +16,13 @@ interface Entry {
 }
 
 interface Config {
-  fileExtensions?: string | string[];
-  ignore?: string | string[];
+  extensions?: string[];
+  ignore?: string[];
   depth?: number;
   color?: boolean;
   structureOnly?: boolean;
   contentsOnly?: boolean;
+  gitignore?: boolean;
   colors?: {
     directory?: string;
     file?: string;
@@ -39,41 +40,49 @@ interface Config {
 
 const program = new Command();
 const defaultConfig: Config = {
-  fileExtensions: undefined,
-  ignore: ['node_modules', 'build', 'package-lock.json'],
+  extensions: [],
+  ignore: ["node_modules/", "build/", "package-lock.json", ".git"],
   depth: 10,
   color: true,
+  gitignore: true,
   colors: {
-    directory: 'blue',
-    file: 'yellow',
-    symlink: 'cyan',
-    content: 'gray'
+    directory: "blue",
+    file: "yellow",
+    symlink: "cyan",
+    content: "gray",
   },
   symbols: {
-    vertical: '│',
-    branch: '├──',
-    end: '└──',
-    space: '    '
-  }
+    vertical: "│",
+    branch: "├──",
+    end: "└──",
+    space: "    ",
+  },
 };
 
 program
-  .name('printa')
-  .description('CLI utility to list project structure and file contents')
-  .version('1.0.5')
-  .argument('<project>', 'Path to the project folder')
-  .option('-f, --file-extensions <extensions>', 'Comma-separated list of file extensions or names to include content')
-  .option('-i, --ignore <patterns>', 'Comma-separated list of folders/files to ignore')
-  .option('-d, --depth <number>', 'Recursive search depth')
-  .option('--no-color', 'Disable color output')
-  .option('--structure-only', 'Show only directory structure')
-  .option('--contents-only', 'Show only file contents')
+  .name("printa")
+  .description("CLI utility to list project structure and file contents")
+  .version("1.0.6")
+  .argument("<project>", "Path to the project folder")
+  .option(
+    "-e, --extensions <extensions>",
+    "Comma-separated list of file extensions to include (ts,js etc)",
+  )
+  .option(
+    "-i, --ignore <patterns>",
+    "Comma-separated list of glob patterns to ignore files/directories",
+  )
+  .option("-d, --depth <number>", "Recursive search depth")
+  .option("--no-color", "Disable color output")
+  .option("--no-gitignore", "Disable reading .gitignore file")
+  .option("--structure-only", "Show only directory structure")
+  .option("--contents-only", "Show only file contents")
   .parse(process.argv);
 
 async function main() {
   try {
     const cliOptions = program.opts();
-    const rcConfig = rc('listcode', defaultConfig) as Config;
+    const rcConfig = rc("listcode", defaultConfig) as Config;
 
     const config: Config = {
       ...defaultConfig,
@@ -82,54 +91,96 @@ async function main() {
       colors: {
         ...defaultConfig.colors,
         ...rcConfig.colors,
-        ...cliOptions.colors
+        ...cliOptions.colors,
       },
       symbols: {
         ...defaultConfig.symbols,
         ...rcConfig.symbols,
-        ...cliOptions.symbols
-      }
+        ...cliOptions.symbols,
+      },
+      ignore: [
+        ...(defaultConfig.ignore || []),
+        ...(rcConfig.ignore || []),
+        ...(cliOptions.ignore ? cliOptions.ignore.split(",") : []),
+      ],
+      extensions: [
+        ...(defaultConfig.extensions || []),
+        ...(rcConfig.extensions || []),
+        ...(cliOptions.extensions ? cliOptions.extensions.split(",") : []),
+      ],
     };
 
     const projectPath = resolve(program.args[0]);
-    const fileExtensions = config.fileExtensions
-      ? (Array.isArray(config.fileExtensions) ? config.fileExtensions : config.fileExtensions.split(','))
-      : null;
 
-    const ignoreList = Array.isArray(config.ignore)
-      ? config.ignore
-      : (config.ignore || '').split(',');
+    let gitignorePatterns: string[] = [];
+    if (config.gitignore) {
+      gitignorePatterns = await readGitignore(projectPath);
+    }
 
-    const maxDepth = config.depth || 10;
+    const ignorePatterns = [...(config.ignore || []), ...gitignorePatterns]
+      .map((p) => p.trim())
+      .filter((p) => p);
 
-    const getColor = (colorName: string, defaultColor: keyof ChalkInstance = 'yellow'): ChalkInstance => {
+    const ig = ignore().add(ignorePatterns);
+
+    const getColor = (
+      colorName: string,
+      defaultColor: keyof ChalkInstance = "yellow",
+    ): ChalkInstance => {
       if (!config.color) return chalk;
-      const colorKey = (config.colors?.[colorName] || defaultColor) as keyof ChalkInstance;
-      return (chalk[colorKey] || chalk[defaultColor]) as unknown as ChalkInstance;
+      const colorKey = (config.colors?.[colorName] ||
+        defaultColor) as keyof ChalkInstance;
+      return (chalk[colorKey] ||
+        chalk[defaultColor]) as unknown as ChalkInstance;
     };
 
-    const structure = await traverseDirectory(projectPath, 0, maxDepth, ignoreList);
+    const structure = await traverseDirectory(
+      projectPath,
+      0,
+      config.depth!,
+      ig,
+      projectPath,
+    );
 
     if (!config.contentsOnly) {
-      console.log(getColor('directory')(`Structure of ${projectPath}:`));
+      console.log(getColor("directory")(`Structure of ${projectPath}:`));
       printStructure(structure, [], config, getColor);
     }
 
     if (!config.structureOnly) {
       const allFiles = collectFiles(structure, projectPath);
-      const filesToInclude = allFiles.filter(file => shouldIncludeFile(file, fileExtensions));
+      const filesToInclude = allFiles.filter((file) =>
+        shouldIncludeFile(file, config.extensions || []),
+      );
 
-      console.log(getColor('content')('\nContent of files:'));
+      console.log(getColor("content")("\nContent of files:"));
       for (const file of filesToInclude) {
         await printFileContents(file, projectPath, config, getColor);
       }
     }
   } catch (error) {
-    console.error(chalk.redBright('Error:'), error instanceof Error ? error.message : 'Unknown error');
-    if (error instanceof Error && error.stack) {
-      console.error(chalk.gray(error.stack));
-    }
+    console.error(
+      chalk.redBright("Error:"),
+      error instanceof Error ? error.message : "Unknown error",
+    );
     process.exit(1);
+  }
+}
+
+async function readGitignore(projectPath: string): Promise<string[]> {
+  try {
+    const content = await readFile(join(projectPath, ".gitignore"), "utf-8");
+    console.log(
+      chalk.green(
+        "Use .gitignore file. If you want to disable it, use --no-gitignore\n",
+      ),
+    );
+    return content
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"));
+  } catch {
+    return [];
   }
 }
 
@@ -137,7 +188,8 @@ async function traverseDirectory(
   dirPath: string,
   currentDepth: number,
   maxDepth: number,
-  ignoreList: string[]
+  ig: Ignore,
+  projectPath: string,
 ): Promise<Entry[]> {
   if (currentDepth > maxDepth) return [];
 
@@ -151,12 +203,15 @@ async function traverseDirectory(
       const isSymlink = entryStat.isSymbolicLink();
       const isDirectory = entryStat.isDirectory();
 
-      if (ignoreList.includes(entryName) || (isDirectory && entryName.startsWith('.'))) {
+      const relativePath = relative(projectPath, entryPath)
+        .split(sep)
+        .join("/");
+      if (ig.ignores(relativePath)) {
         processedEntries.push({
           name: entryName,
           isDirectory,
           isSymlink,
-          ignored: true
+          ignored: true,
         });
         continue;
       }
@@ -165,31 +220,37 @@ async function traverseDirectory(
         processedEntries.push({
           name: `${entryName} →`,
           isDirectory: false,
-          isSymlink: true
+          isSymlink: true,
         });
         continue;
       }
 
       if (isDirectory) {
-        const children = await traverseDirectory(entryPath, currentDepth + 1, maxDepth, ignoreList);
+        const children = await traverseDirectory(
+          entryPath,
+          currentDepth + 1,
+          maxDepth,
+          ig,
+          projectPath,
+        );
         processedEntries.push({
           name: entryName,
           isDirectory: true,
           isSymlink: false,
-          children
+          children,
         });
       } else {
         processedEntries.push({
           name: entryName,
           isDirectory: false,
-          isSymlink: false
+          isSymlink: false,
         });
       }
     }
 
     return processedEntries.sort((a, b) => a.name.localeCompare(b.name));
   } catch (error) {
-    console.error(chalk.yellow(`Warning: Skipping ${dirPath} - ${error instanceof Error ? error.message : 'Unknown error'}`));
+    console.error(chalk.yellow(`Warning: Skipping ${dirPath}`));
     return [];
   }
 }
@@ -198,37 +259,48 @@ function printStructure(
   entries: Entry[],
   prefixes: string[],
   config: Config,
-  getColor: (colorName: string, defaultColor?: keyof ChalkInstance) => ChalkInstance
+  getColor: (
+    colorName: string,
+    defaultColor?: keyof ChalkInstance,
+  ) => ChalkInstance,
 ) {
   const lastIndex = entries.length - 1;
   entries.forEach((entry, index) => {
+    if (entry.ignored) return;
+
     const isLast = index === lastIndex;
-    const connector = isLast ? config.symbols?.end ?? '└──' : config.symbols?.branch ?? '├──';
-    const currentPrefix = prefixes.join('');
+    const connector = isLast
+      ? config.symbols?.end ?? "└──"
+      : config.symbols?.branch ?? "├──";
+    const currentPrefix = prefixes.join("");
 
     let entryName = entry.name;
     if (entry.isDirectory) {
-      entryName = getColor('directory')(entryName + '/');
+      entryName = getColor("directory")(entryName + "/");
     } else if (entry.isSymlink) {
-      entryName = getColor('symlink')(entryName);
+      entryName = getColor("symlink")(entryName);
     } else {
-      const ext = extname(entry.name);
-      entryName = getColor(ext, 'green')(entryName);
+      entryName = getColor("file")(entryName);
     }
 
     console.log(`${currentPrefix}${connector} ${entryName}`);
 
     if (entry.children) {
       const newPrefixes = [...prefixes];
-      newPrefixes.push(isLast ? config.symbols?.space ?? '    ' : `${config.symbols?.vertical ?? '│'}   `);
+      newPrefixes.push(
+        isLast
+          ? config.symbols?.space ?? "    "
+          : `${config.symbols?.vertical ?? "│"}   `,
+      );
       printStructure(entry.children, newPrefixes, config, getColor);
     }
   });
 }
 
 function collectFiles(entries: Entry[], basePath: string): string[] {
-  return entries.filter(entry => !entry.ignored).flatMap(entry => {
-    const entryPath = join(basePath, entry.name.split(' →')[0]);
+  return entries.flatMap((entry) => {
+    if (entry.ignored) return [];
+    const entryPath = join(basePath, entry.name.split(" →")[0]);
     if (entry.isDirectory && entry.children) {
       return collectFiles(entry.children, entryPath);
     }
@@ -236,32 +308,28 @@ function collectFiles(entries: Entry[], basePath: string): string[] {
   });
 }
 
-function shouldIncludeFile(filePath: string, fileExtensions: string[] | null): boolean {
-  if (!fileExtensions) return true;
+function shouldIncludeFile(filePath: string, extensions: string[]): boolean {
+  if (extensions.length === 0) return true;
 
-  const filename = basename(filePath);
-  const ext = extname(filename);
-  const baseName = filename.slice(0, -ext.length) || filename;
-
-  return fileExtensions.some(pattern => {
-    if (pattern.startsWith('.')) return ext === pattern;
-    return filename === pattern || baseName === pattern;
-  });
+  const ext = extname(filePath).slice(1).toLowerCase();
+  return extensions.some((e) => e.toLowerCase() === ext);
 }
 
 async function printFileContents(
   filePath: string,
   basePath: string,
   config: Config,
-  getColor: (colorName: string, defaultColor?: keyof ChalkInstance) => ChalkInstance
+  getColor: (
+    colorName: string,
+    defaultColor?: keyof ChalkInstance,
+  ) => ChalkInstance,
 ) {
   try {
     const fileBuffer = await readFile(filePath);
     if (!isText(filePath, fileBuffer)) return;
-    const content = fileBuffer.toString('utf-8');
+    const content = fileBuffer.toString("utf-8");
     const relativePath = relative(basePath, filePath);
-    const ext = extname(filePath);
-    const color = getColor(ext, 'gray');
+    const color = getColor("content");
 
     let highlightedContent = content;
     if (config.color) {
@@ -277,7 +345,7 @@ async function printFileContents(
     console.log(color(`\n./${relativePath}:`));
     console.log(highlightedContent);
   } catch (error) {
-    console.error(chalk.yellow(`\nWarning: Could not read ${filePath} - ${error instanceof Error ? error.message : 'Unknown error'}`));
+    console.error(chalk.yellow(`\nWarning: Could not read ${filePath}`));
   }
 }
 
