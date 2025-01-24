@@ -62,7 +62,7 @@ const defaultConfig: Config = {
 program
   .name("printa")
   .description("CLI utility to list project structure and file contents")
-  .version("1.0.7")
+  .version("1.0.8")
   .argument("<project>", "Path to the project folder")
   .option(
     "-e, --extensions <extensions>",

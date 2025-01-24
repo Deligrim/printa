@@ -1,6 +1,6 @@
 {
   "name": "printa",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "CLI utility to list project structure with file contents",
   "main": "dist/index.js",
   "bin": {
