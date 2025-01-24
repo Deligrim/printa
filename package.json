@@ -1,0 +1,47 @@
+{
+  "name": "printa",
+  "version": "1.0.5",
+  "description": "CLI utility to list project structure with file contents",
+  "main": "dist/index.js",
+  "bin": {
+    "printa": "./dist/index.js"
+  },
+  "type": "module",
+  "scripts": {
+    "build": "tsc && chmod +x dist/index.js",
+    "prepublish": "npm run build"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1",
+    "cli-highlight": "^2.1.11",
+    "commander": "^13.1.0",
+    "istextorbinary": "^9.5.0",
+    "rc": "^1.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.10",
+    "@types/rc": "^1.2.4",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  },
+  "keywords": [
+    "cli",
+    "directory-listing",
+    "code-structure",
+    "developer-tools"
+  ],
+  "author": "deligrim <unidevc@ya.ru>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deligrim/printa.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ]
+}
